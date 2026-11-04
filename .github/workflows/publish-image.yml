@@ -1,0 +1,146 @@
+name: Build and publish CADCraft Web
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "11 5 * * 1"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-image.yml"
+      - "README.md"
+      - "docker-compose.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-cadcraft-web
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out packaging repository
+        uses: actions/checkout@v4
+
+      - name: Check out upstream CADCraft
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/cadcraft
+          ref: main
+          path: upstream
+
+      - name: Check out optional craft-fonts
+        uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: main
+          path: craft-fonts
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Install Trunk
+        run: cargo install trunk --locked
+
+      - name: Build CADCraft Web
+        working-directory: upstream/apps/cadcraft-web
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+        run: |
+          trunk build --release
+          test -s ../../dist/web/index.html
+          compgen -G "../../dist/web/cadcraft-*.js" > /dev/null
+          compgen -G "../../dist/web/cadcraft-*_bg.wasm" > /dev/null
+
+      - name: Prepare NGINX build context
+        run: |
+          mkdir -p build-context/site
+          cp -a upstream/dist/web/. build-context/site/
+
+          cat > build-context/Dockerfile <<'EOF'
+          FROM nginx:1.27-alpine
+          COPY nginx.conf /etc/nginx/conf.d/default.conf
+          COPY site/ /usr/share/nginx/html/
+          EXPOSE 8080
+          EOF
+
+          cat > build-context/nginx.conf <<'EOF'
+          server {
+              listen 8080;
+              server_name _;
+              root /usr/share/nginx/html;
+              index index.html;
+
+              include /etc/nginx/mime.types;
+              types {
+                  application/wasm wasm;
+                  text/javascript js;
+              }
+
+              add_header X-Content-Type-Options nosniff;
+
+              gzip on;
+              gzip_vary on;
+              gzip_min_length 1024;
+              gzip_types
+                  application/wasm
+                  text/javascript
+                  text/css
+                  text/html
+                  application/json
+                  image/svg+xml;
+
+              location = /index.html {
+                  add_header Cache-Control "no-cache";
+              }
+
+              location ~* ^/cadcraft-[0-9a-f]+(_bg)?\.(js|wasm)$ {
+                  add_header Cache-Control "public, max-age=31536000, immutable";
+                  try_files $uri =404;
+              }
+
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+          EOF
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract upstream commit
+        id: upstream
+        run: echo "sha=$(git -C upstream rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: build-context
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cadcraft-web:latest
+            ghcr.io/${{ github.repository_owner }}/cadcraft-web:upstream-${{ steps.upstream.outputs.sha }}
+          labels: |
+            org.opencontainers.image.title=CADCraft Web
+            org.opencontainers.image.description=Self-hosted WebAssembly CAD drafting application
+            org.opencontainers.image.source=https://github.com/storytold/cadcraft
+            org.opencontainers.image.revision=${{ steps.upstream.outputs.sha }}
