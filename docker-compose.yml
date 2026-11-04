@@ -1,0 +1,7 @@
+services:
+  cadcraft-web:
+    image: ghcr.io/mikapst/cadcraft-web:latest
+    container_name: cadcraft-web
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
