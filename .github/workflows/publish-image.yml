@@ -47,11 +47,6 @@ jobs:
           toolchain: "1.96.1"
           targets: wasm32-unknown-unknown
 
-      - name: Verify Rust toolchain
-        run: |
-          rustc --version
-          cargo --version
-
       - name: Install Trunk
         run: cargo install trunk --locked
 
@@ -142,8 +137,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/cadcraft-web:latest
-            ghcr.io/${{ github.repository_owner }}/cadcraft-web:upstream-${{ steps.upstream.outputs.sha }}
+            ghcr.io/mikapst/cadcraft-web:latest
+            ghcr.io/mikapst/cadcraft-web:upstream-${{ steps.upstream.outputs.sha }}
           labels: |
             org.opencontainers.image.title=CADCraft Web
             org.opencontainers.image.description=Self-hosted WebAssembly CAD drafting application
